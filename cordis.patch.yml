@@ -1,0 +1,16 @@
+# Bundle patch for dsh-od-quota.
+#
+# The `config` block is declared even though every field has a default: an entry
+# without a config document has no user layer, and the settings service then has
+# nothing to project into the page this plugin registers.
+- insert:
+    - id: od-quota
+      name: dsh-od-quota
+      config:
+        enabled: true
+        keyRef: OPENDESIGN_CONTROL_KEY
+        workspaceId: ''
+        autoRefresh: true
+        refreshNonce: ''
+        quotaJson: ''
+        loginJson: ''
