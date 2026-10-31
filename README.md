@@ -1,5 +1,8 @@
 # dsh-od-quota
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/WuWei-Peng/dsh-od-quota)](https://github.com/WuWei-Peng/dsh-od-quota/releases)
+
 > 非官方插件：与 Open Design / Powerformer 无隶属关系，仅按公开接口读取你自己账号的额度。
 
 在 DSH 里查看 **OpenDesign 订阅额度**：设置页完成浏览器登录并展示 5 小时 / 7 天窗口与钱包，会话标题栏右侧（「打开应用」箭头左边）常驻套餐标识与两条剩余额度进度条（绿 = 充足，黄 = 注意，红 = 快用完）。
