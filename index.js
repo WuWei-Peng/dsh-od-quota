@@ -49,8 +49,30 @@ const CONFIG_WATCH_MS = 1_000
 /** A repeat of the same numbers is not worth even a `describe()`. */
 const PUBLISH_DEDUPE_MS = 15_000
 
-/** How many times one field write is attempted before giving up. */
-const PUBLISH_ATTEMPTS = 2
+/**
+ * How many times one field write is attempted before giving up.
+ *
+ * Every write goes through the host settings editor, which recomposes the
+ * profile and checks a revision before it commits. A reading that collides
+ * with another writer — the open settings page, a market toggle, a click on
+ * refresh — is refused with a conflict, and dropping that refusal on the floor
+ * is what makes the panel look frozen. Four attempts across ~600 ms ride out a
+ * conflict without turning a failure into a busy loop.
+ */
+const PUBLISH_ATTEMPTS = 4
+
+/** Delay between publish attempts, multiplied by the attempt number. */
+const PUBLISH_RETRY_MS = 80
+
+/**
+ * How often the poll deadline is checked against the clock.
+ *
+ * `setInterval` is a request, not a guarantee: a suspended timer, a stalled
+ * event loop or a dropped tick leaves the panel stale until the next minute.
+ * The watchdog compares the wall clock with the last read instead of trusting
+ * the timer, so a missed tick is repaired within seconds.
+ */
+const WATCHDOG_MS = 15_000
 
 /** Device approval poll fallback, when the server omits its own interval. */
 const DEVICE_POLL_FALLBACK_MS = 2_000
@@ -139,7 +161,7 @@ async function requestJson(url, options = {}) {
     method: options.method ?? 'GET',
     headers: {
       accept: 'application/json',
-      'user-agent': 'dsh-od-quota/0.1.0',
+      'user-agent': 'dsh-od-quota/0.1.1',
       ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
       ...(options.headers ?? {}),
     },
@@ -336,8 +358,9 @@ export function apply(ctx, raw) {
    *
    * A write costs a profile-level file lock and a full plugin-tree
    * recomposition, so an unchanged value never reaches `update`. A conflict is
-   * re-read once — the page may have edited the entry between the read and the
-   * write — and nothing is retried harder than that.
+   * re-read on every attempt — the page may have edited the entry between the
+   * read and the write — because a refused write is otherwise indistinguishable
+   * from a working panel that simply has nothing new to show.
    * @param field - config field name.
    * @param json - serialized value.
    * @returns whether the document now carries the value.
@@ -354,7 +377,7 @@ export function apply(ctx, raw) {
         return false
       }
       if (row === undefined) {
-        await sleep(60)
+        await sleep(PUBLISH_RETRY_MS * (attempt + 1))
         continue
       }
       if (row.value !== undefined && row.value[field] === json) return true
@@ -363,7 +386,7 @@ export function apply(ctx, raw) {
         return true
       } catch (error) {
         if (attempt + 1 < PUBLISH_ATTEMPTS) {
-          await sleep(60)
+          await sleep(PUBLISH_RETRY_MS * (attempt + 1))
           continue
         }
         log(`could not publish ${field} (${String(error)})`)
@@ -379,6 +402,16 @@ export function apply(ctx, raw) {
   /** Last published facts minus their timestamp, for change detection. */
   let lastPublished = ''
   let lastPublishedAt = 0
+  /**
+   * When the current (or last) read started, on the wall clock.
+   *
+   * The watchdog compares this against `Date.now()` rather than counting timer
+   * ticks: a tick that never fired leaves no trace in a counter, but the gap it
+   * leaves in this timestamp is exactly what needs repairing.
+   */
+  let lastReadStartedAt = 0
+  /** A snapshot whose write was refused, kept so the watchdog can retry it. */
+  let unpublished
   let inflight
   let device
   let disposed = false
@@ -420,9 +453,18 @@ export function apply(ctx, raw) {
   const publishReading = async (snapshot) => {
     const { asOf: _freshness, ...facts } = snapshot
     const factsJson = JSON.stringify(facts)
-    if (factsJson === lastPublished && Date.now() - lastPublishedAt < PUBLISH_DEDUPE_MS) return
+    if (factsJson === lastPublished && Date.now() - lastPublishedAt < PUBLISH_DEDUPE_MS) {
+      unpublished = undefined
+      return
+    }
     const accepted = await publish('quotaJson', JSON.stringify(snapshot))
-    if (!accepted) return
+    if (!accepted) {
+      // Keep the reading: the watchdog retries it on its next pass, so one
+      // refused write costs a few seconds instead of a whole poll interval.
+      unpublished = snapshot
+      return
+    }
+    unpublished = undefined
     lastPublished = factsJson
     lastPublishedAt = Date.now()
   }
@@ -449,8 +491,20 @@ export function apply(ctx, raw) {
   /** One quota read, deduplicated while a previous read is in flight. */
   const refresh = async () => {
     if (disposed) return
-    if (inflight !== undefined) return inflight
+    if (inflight !== undefined) {
+      // A read that is still "in flight" long after its own deadline is not in
+      // flight at all: its promise was abandoned without settling. Keep waiting
+      // on it and every later refresh, manual ones included, joins a promise
+      // that never resolves — the panel stops updating until a restart.
+      if (Date.now() - lastReadStartedAt > REQUEST_TIMEOUT_MS * 3) {
+        log(`dropping a read that has been pending for ${Math.round((Date.now() - lastReadStartedAt) / 1000)}s`)
+        inflight = undefined
+      } else {
+        return inflight
+      }
+    }
     inflight = (async () => {
+      lastReadStartedAt = Date.now()
       const config = current()
       if (!config.enabled) return
       const key = await resolveKey(config.keyRef)
@@ -634,9 +688,31 @@ export function apply(ctx, raw) {
         void refresh()
       }
     }, CONFIG_WATCH_MS)
+    // The watchdog repairs what a timer cannot promise. It looks at the clock,
+    // so a tick that never fired, an event loop that stalled past a whole
+    // interval, or a write the settings editor refused all end the same way:
+    // the next pass notices the gap and reads again. A refused publish is
+    // retried from the snapshot it left behind, not by reading the vendor API
+    // a second time.
+    const watchdog = setInterval(() => {
+      const config = current()
+      if (!config.enabled) return
+      if (unpublished !== undefined && inflight === undefined) {
+        void publishReading(unpublished)
+        return
+      }
+      if (!config.autoRefresh || inflight !== undefined) return
+      const overdue = Date.now() - lastReadStartedAt
+      if (lastReadStartedAt === 0 || overdue > QUOTA_POLL_MS + WATCHDOG_MS) {
+        log(`poll overdue by ${Math.round(overdue / 1000)}s; reading again`)
+        lastReadStartedAt = Date.now()
+        void refresh()
+      }
+    }, WATCHDOG_MS)
     return () => {
       clearInterval(tick)
       clearInterval(watch)
+      clearInterval(watchdog)
     }
   })
 

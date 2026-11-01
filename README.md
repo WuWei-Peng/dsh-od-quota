@@ -20,17 +20,23 @@ OpenDesign 云有两个平面，额度只在控制面：
 
 ## 安装
 
+```sh
+# 直接装仓库（无需发版）
+dsh plugin --profile web add github:WuWei-Peng/dsh-od-quota
+
+# 或装 GitHub Release 上的预构建包（更快，不需要构建环境）
+dsh plugin --profile web add https://github.com/WuWei-Peng/dsh-od-quota/releases/latest/download/dsh-od-quota.tgz
 ```
-# 在 DSH 里用插件管理器，目标指向本目录
-plugin_manager install_bundle(target="/path/to/dsh-od-quota")
-```
+
+装完重启一次 `dsh web`，设置侧栏出现「OpenDesign 额度」。
 
 ## 工作方式
 
 1. 进入设置页时若没有 key，插件调用 `POST /api/v1/cli/device-authorizations` 生成批准链接与 6 位码；页面显示码、倒计时和可复制的链接。
 2. 你在浏览器登录 OpenDesign 并批准，插件轮询到 `controlKey`，写进 DSH 凭据服务（引用名默认 `OPENDESIGN_CONTROL_KEY`，可改 `keyRef`）。
 3. 之后每 60 秒读一次 `billing/preflight` + `billing/summary`，把结果写回本插件配置的 `quotaJson`；页面和标题栏都只解析这一份文档。
-4. 手动刷新写 `refreshNonce`，宿主观测到变化立即重读。
+4. 手动刷新写 `refreshNonce`（时间戳 + 递增序号，连点两次也不会重样），宿主观测到变化立即重读；写入被拒绝时页面会明说并让你重试，而不是「点了没反应」。
+5. 一个 15 秒的看门狗按**墙钟**核对上次读取时间：漏掉的 tick、卡住不返回的请求、被设置编辑器拒绝的一次写入，都会在下次看门狗时补上。
 
 设备授权是主路径；也可以直接粘贴 `vela_ctrl_…`。粘贴 `sk-amr_…` 会被前端拒绝并说明原因。
 

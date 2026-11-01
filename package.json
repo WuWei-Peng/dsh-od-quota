@@ -1,6 +1,6 @@
 {
   "name": "dsh-od-quota",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenDesign 订阅额度：在设置页登录并查看 5 小时 / 7 天剩余额度，会话标题栏常驻显示",
   "type": "module",
   "license": "MIT",

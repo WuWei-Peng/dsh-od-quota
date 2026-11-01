@@ -30,6 +30,22 @@ window.__ModuleLoader__.load({
     let approvalWindow
 
     /**
+     * Monotonic part of the refresh nonce.
+     *
+     * The Host refreshes when it sees a nonce that differs from the last one it
+     * read, so two clicks inside the same millisecond used to write the same
+     * value and the second one did nothing at all. A counter makes every click
+     * a distinct request; the timestamp keeps it ordered and readable in the
+     * profile patch.
+     * @returns a nonce that never repeats.
+     */
+    let refreshSequence = 0
+    const nextRefreshNonce = () => {
+      refreshSequence += 1
+      return `${Date.now()}-${refreshSequence}`
+    }
+
+    /**
      * Remaining-percentage thresholds for the header meter.
      *
      * Expressed as remaining because that is what the bar paints: plenty of
@@ -686,14 +702,44 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [reLoginBusy, setReLoginBusy] = React.useState(false)
       const [reLoginError, setReLoginError] = React.useState(undefined)
+      const [refreshNote, setRefreshNote] = React.useState(undefined)
       const snapshot = useForm(form)
       const value = snapshot.value instanceof Object ? snapshot.value : {}
 
-      /** Run one refresh and keep the button honest for its duration. */
+      /**
+       * Run one refresh and keep the button honest for its duration.
+       *
+       * The host acts on a refresh only after the settings document reports a
+       * new nonce, and that write is revision-checked. It can be refused — the
+       * host republishes the same document every minute, so a click can land
+       * behind the page's own snapshot. A refusal returned `false`, which the
+       * old code dropped on the floor: the button flashed and nothing else
+       * happened. Retry once with the recovered revision, and say so when even
+       * that fails, instead of pretending the request went out.
+       */
       const doRefresh = () => {
+        if (busy) return
         setBusy(true)
-        props.onRefresh()
-        setTimeout(() => setBusy(false), 2_000)
+        setRefreshNote(undefined)
+        void (async () => {
+          let sent = false
+          let failure
+          try {
+            sent = (await props.onRefresh()) !== false
+            if (!sent) {
+              // The mirror needs a moment to catch up with the revision the
+              // host bumped while this click was in flight.
+              await new Promise((resolve) => setTimeout(resolve, 350))
+              sent = (await props.onRefresh()) !== false
+            }
+          } catch (problem) {
+            failure = problem instanceof Error ? problem.message : String(problem)
+          }
+          setRefreshNote(sent
+            ? '已请求刷新，额度通常在一两秒内更新'
+            : (failure === undefined ? '这次刷新请求没有送达（配置被并发修改），请再点一下' : failure))
+          setBusy(false)
+        })()
       }
 
       /** Sign out, surfacing whatever the credential store refuses to do. */
@@ -770,6 +816,11 @@ window.__ModuleLoader__.load({
             : h('div', { style: card }, statusRow),
         reLoginError === undefined ? null
           : h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-state-error-primary)' } }, reLoginError),
+        // Feedback for the refresh button. Silence here was the bug report:
+        // a click that produced no visible change could equally have been
+        // "the numbers are the same" or "the request never left the page".
+        refreshNote === undefined ? null
+          : h('div', { style: { ...muted, fontSize: 12 } }, refreshNote),
 
         hasNumbers && !pending
           ? h('div', { style: card },
@@ -885,11 +936,16 @@ window.__ModuleLoader__.load({
             if (result !== undefined && result.ok === false) {
               throw new Error(result.error instanceof Error ? result.error.message : String(result.error))
             }
-            void form.set('refreshNonce', String(Date.now()))
+            void form.set('refreshNonce', nextRefreshNonce())
           }
 
-          /** Ask the Host for one immediate read through the entry's own nonce. */
-          const refresh = () => { void form.set('refreshNonce', String(Date.now())) }
+          /**
+           * Ask the Host for one immediate read through the entry's own nonce.
+           * The promise is returned so the caller can tell a delivered request
+           * from one the settings editor refused.
+           * @returns whether the write was accepted.
+           */
+          const refresh = () => form.set('refreshNonce', nextRefreshNonce())
 
           const injected = () => ({
             form,
