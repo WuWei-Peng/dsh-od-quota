@@ -735,9 +735,21 @@ window.__ModuleLoader__.load({
           } catch (problem) {
             failure = problem instanceof Error ? problem.message : String(problem)
           }
-          setRefreshNote(sent
-            ? '已请求刷新，额度通常在一两秒内更新'
-            : (failure === undefined ? '这次刷新请求没有送达（配置被并发修改），请再点一下' : failure))
+          if (sent) {
+            // "Sent" is not "updated". Confirm against the reading the page can
+            // actually see, so a host that is wedged on a hung request is not
+            // reported as a success just because the nonce was accepted.
+            const before = parseJson(form.getSnapshot().value?.quotaJson)?.asOf
+            setRefreshNote('已请求刷新…')
+            setTimeout(() => {
+              const after = parseJson(form.getSnapshot().value?.quotaJson)?.asOf
+              setRefreshNote(after === before
+                ? '宿主还没有给出新读数：这一轮请求可能卡住了，稍后会自动重试'
+                : '已刷新')
+            }, 4_000)
+          } else setRefreshNote(failure === undefined
+            ? '这次刷新请求没有送达（配置被并发修改），请再点一下'
+            : failure)
           setBusy(false)
         })()
       }

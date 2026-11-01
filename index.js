@@ -152,30 +152,58 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
  * One JSON request with a deadline.
+ *
+ * `AbortSignal.timeout` asks fetch to give up; it does not promise that it
+ * will. A connection that blackholes — a proxy that accepts the socket and
+ * then says nothing is the usual one — can leave the promise pending with the
+ * signal already fired, and everything waiting on it waits forever. So the
+ * deadline is also enforced from the outside: whichever settles first wins,
+ * and the loser is abandoned.
  * @param url - absolute URL.
  * @param options - method, headers, body.
  * @returns status and decoded body; a transport failure rejects.
  */
 async function requestJson(url, options = {}) {
-  const response = await fetch(url, {
-    method: options.method ?? 'GET',
-    headers: {
-      accept: 'application/json',
-      'user-agent': 'dsh-od-quota/0.1.1',
-      ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
-      ...(options.headers ?? {}),
-    },
-    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  const controller = typeof AbortController === 'function' ? new AbortController() : undefined
+  let timer
+  const deadline = new Promise((_resolve, reject) => {
+    timer = setTimeout(
+      () => {
+        try { controller?.abort() } catch { /* already settled */ }
+        reject(new Error(`request timed out after ${REQUEST_TIMEOUT_MS} ms`))
+      },
+      REQUEST_TIMEOUT_MS,
+    )
+    if (typeof timer?.unref === 'function') timer.unref()
   })
-  const text = await response.text().catch(() => '')
-  let body
+  const attempt = (async () => {
+    const response = await fetch(url, {
+      method: options.method ?? 'GET',
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'dsh-od-quota/0.1.2',
+        ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...(options.headers ?? {}),
+      },
+      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+      signal: controller?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+    const text = await response.text().catch(() => '')
+    let body
+    try {
+      body = text.length === 0 ? null : JSON.parse(text)
+    } catch {
+      body = { text }
+    }
+    return { status: response.status, ok: response.ok, body }
+  })()
   try {
-    body = text.length === 0 ? null : JSON.parse(text)
-  } catch {
-    body = { text }
+    return await Promise.race([attempt, deadline])
+  } finally {
+    clearTimeout(timer)
+    // The loser must not surface as an unhandled rejection later.
+    attempt.catch(() => {})
   }
-  return { status: response.status, ok: response.ok, body }
 }
 
 /** Narrow a value to a non-empty string. @param value - candidate. @returns it or undefined. */
@@ -697,6 +725,13 @@ export function apply(ctx, raw) {
     const watchdog = setInterval(() => {
       const config = current()
       if (!config.enabled) return
+      // A read that outlived its own deadline several times over is abandoned,
+      // not joined. This is the difference between "one slow minute" and "the
+      // panel never updates again until the process restarts".
+      if (inflight !== undefined && Date.now() - lastReadStartedAt > REQUEST_TIMEOUT_MS * 2) {
+        log(`read pending for ${Math.round((Date.now() - lastReadStartedAt) / 1000)}s; abandoning it`)
+        inflight = undefined
+      }
       if (unpublished !== undefined && inflight === undefined) {
         void publishReading(unpublished)
         return
