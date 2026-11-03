@@ -1,7 +1,7 @@
 {
   "name": "dsh-od-quota",
-  "version": "0.1.3",
-  "description": "OpenDesign 订阅额度：侧栏额度页 + 设置摘要，会话标题栏常驻自适应额度条",
+  "version": "0.1.4",
+  "description": "OpenDesign 订阅额度：侧栏额度页 + 设置摘要，会话标题栏常驻自适应额度条；中英双语界面",
   "type": "module",
   "license": "MIT",
   "author": "WuWei_Peng",
@@ -52,7 +52,8 @@
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-ui-slots",
         "@deepseek-ai/dsh-api-settings-controller",
-        "@deepseek-ai/dsh-client-ui-layout"
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-locale"
       ]
     }
   },

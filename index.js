@@ -80,6 +80,16 @@ const PUBLISH_ATTEMPTS = 4
 const PUBLISH_RETRY_MS = 80
 
 /**
+ * Deadline for one settings write.
+ *
+ * `settings.update` recomposes the profile and can, in a wedged profile,
+ * never settle. Without an outside deadline the read that is waiting on it
+ * stays "in flight" forever: the panel freezes with the last numbers and even
+ * a manual refresh joins a promise that will never resolve.
+ */
+const PUBLISH_TIMEOUT_MS = 8_000
+
+/**
  * How often the poll deadline is checked against the clock.
  *
  * `setInterval` is a request, not a guarantee: a suspended timer, a stalled
@@ -166,6 +176,22 @@ function readConfig(raw) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
+ * Race one promise against an outside deadline.
+ * @param promise - the work to bound.
+ * @param ms - deadline in milliseconds.
+ * @param label - diagnostic name used by the timeout error.
+ * @returns the promise's value, or a rejection once the deadline passes.
+ */
+function withDeadline(promise, ms, label) {
+  let timer
+  const deadline = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms)
+    if (typeof timer?.unref === 'function') timer.unref()
+  })
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer))
+}
+
+/**
  * One JSON request with a deadline.
  *
  * `AbortSignal.timeout` asks fetch to give up; it does not promise that it
@@ -196,7 +222,7 @@ async function requestJson(url, options = {}) {
       method: options.method ?? 'GET',
       headers: {
         accept: 'application/json',
-        'user-agent': 'dsh-od-quota/0.1.2',
+        'user-agent': 'dsh-od-quota/' + PLUGIN_VERSION,
         ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
         ...(options.headers ?? {}),
       },
@@ -425,7 +451,11 @@ export function apply(ctx, raw) {
       }
       if (row.value !== undefined && row.value[field] === json) return true
       try {
-        await settings.update(ENTRY_ID, { [field]: json }, row.revision)
+        await withDeadline(
+          settings.update(ENTRY_ID, { [field]: json }, row.revision),
+          PUBLISH_TIMEOUT_MS,
+          `settings.update(${field})`,
+        )
         return true
       } catch (error) {
         if (attempt + 1 < PUBLISH_ATTEMPTS) {
@@ -546,7 +576,7 @@ export function apply(ctx, raw) {
         return inflight
       }
     }
-    inflight = (async () => {
+    const run = (async () => {
       lastReadStartedAt = Date.now()
       const config = current()
       if (!config.enabled) return
@@ -580,8 +610,14 @@ export function apply(ctx, raw) {
           error: failureOf('network', `无法连接 OpenDesign：${error instanceof Error ? error.message : String(error)}`),
         }))
       }
-    })().finally(() => { inflight = undefined })
-    return inflight
+    })()
+    // Only clear the slot this read owns: an abandoned read must not wipe out
+    // the replacement that the watchdog already started.
+    const tracked = run.finally(() => {
+      if (inflight === tracked) inflight = undefined
+    })
+    inflight = tracked
+    return tracked
   }
 
   // --- device authorization ------------------------------------------------

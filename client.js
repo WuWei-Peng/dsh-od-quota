@@ -64,9 +64,9 @@ window.__ModuleLoader__.load({
 
     // --- copy ---------------------------------------------------------------
     //
-    // Every visible string lives here. Not wired to the Client locale service
-    // yet — the interface is Chinese-only for now — but centralising it means
-    // adding `en` later is a copy table, not a hunt through components.
+    // Two complete dictionaries, selected by the Client locale service. All
+    // visible text lives here; the active language is read from `locale` so a
+    // language switch re-renders every surface through `useCopy`.
 
     const COPY = {
       zh: {
@@ -79,6 +79,7 @@ window.__ModuleLoader__.load({
             + ' · 剩余额度（' + summary + '）'
             + ' · 读取于 ' + at
             + (stale ? '（刷新失败，数据可能过期）' : ''),
+          hostStalled: '宿主可能没有在轮询',
           aria: (summary, at, stale) =>
             'OpenDesign 额度：' + summary + '，读取于 ' + at
             + (stale ? '（数据可能过期）' : '')
@@ -93,11 +94,11 @@ window.__ModuleLoader__.load({
           signingOut: '正在退出…',
           enable: '启用',
           readAt: '读取于 ',
-          lastSuccess: '（上次成功 ',
+          lastSuccess: (at) => '（上次成功 ' + at + '）',
           wallet: '钱包',
           balance: '余额 ',
           periodEnd: '周期结束 ',
-          loading: '正在读取额度…',
+          remaining: ' 剩余',
           disabled: '插件已在配置里停用（enabled=false）：不轮询，顶栏额度条和本页都不会更新。',
           disabledShort: '插件已停用：不轮询，顶栏额度条也不显示。',
           noForm: '配置服务未就绪：这个宿主没有提供设置表单，插件暂时无法保存登录信息。',
@@ -106,7 +107,8 @@ window.__ModuleLoader__.load({
           refreshed: '已刷新',
           refreshStuck: '宿主还没有给出新读数：这一轮可能卡住了，稍后会自动重试',
           refreshRejected: '这次刷新请求没有送达（配置被并发修改），请再点一下',
-          note: '扩展设置',
+          staleHint: '数据可能过期',
+          hostStalled: (m) => '宿主已 ' + m + ' 分钟没有更新读数：自动轮询可能停了，重启 dsh web 后恢复。',
         },
         status: {
           connected: '已连接',
@@ -150,12 +152,156 @@ window.__ModuleLoader__.load({
         common: {
           copy: '复制',
           copied: '已复制',
-          unknown: '—',
+        },
+        errors: {
+          credentialsNotReady: '凭据服务尚未就绪，请稍后重试。',
+          credentialsUnavailable: '凭据服务尚未就绪，无法退出登录。',
+        },
+        window: {
+          days: (n) => n + ' 天窗口',
+          hours: (n) => n + ' 小时窗口',
+          minutes: (n) => n + ' 分钟窗口',
+        },
+        countdown: {
+          unknown: '重置时间未知',
+          soon: '即将重置',
+          days: (d, h) => d + '天 ' + h + '小时后重置',
+          hours: (h, m) => h + '小时 ' + m + '分后重置',
+          minutes: (m) => m + '分钟后重置',
+        },
+      },
+      en: {
+        app: {
+          name: 'OpenDesign Quota',
+        },
+        meter: {
+          title: (tier, summary, at, stale) =>
+            (tier === '' ? 'OpenDesign' : 'Design Plan ' + tier)
+            + ' · remaining quota (' + summary + ')'
+            + ' · read at ' + at
+            + (stale ? ' (refresh failed; data may be stale)' : ''),
+          hostStalled: 'host may not be polling',
+          aria: (summary, at, stale) =>
+            'OpenDesign quota: ' + summary + ', read at ' + at
+            + (stale ? ' (data may be stale)' : '')
+            + '. Click to open the quota page',
+        },
+        page: {
+          title: 'OpenDesign quota',
+          intro: 'The 5-hour and 7-day allowance, read from the OpenDesign control plane.',
+          refresh: 'Refresh',
+          refreshing: 'Refreshing…',
+          relogin: 'Sign in again',
+          signingOut: 'Signing out…',
+          enable: 'Enable',
+          readAt: 'Read at ',
+          lastSuccess: (at) => ' (last success ' + at + ')',
+          wallet: 'Wallet',
+          balance: 'Balance ',
+          periodEnd: 'Period ends ',
+          remaining: ' remaining',
+          disabled: 'The plugin is disabled (enabled=false): it does not poll, so the header meter and this page stay frozen.',
+          disabledShort: 'Plugin disabled: no polling, and the header meter is hidden.',
+          noForm: 'The config service is not ready: this host does not expose a settings form, so sign-in cannot be saved.',
+          unwritable: 'This profile does not accept writes; sign-in results cannot be saved.',
+          refreshPending: 'Refresh requested…',
+          refreshed: 'Refreshed',
+          refreshStuck: 'The host has not produced a new reading yet; this round may be stuck and will retry automatically',
+          refreshRejected: 'The refresh request did not land (the config changed concurrently). Please click again.',
+          staleHint: 'Data may be stale',
+          hostStalled: (m) => 'The host has not refreshed for ' + m + ' minutes: polling may have stopped. Restart dsh web to resume.',
+        },
+        status: {
+          connected: 'Connected',
+          stale: 'Data is stale',
+        },
+        signIn: {
+          title: 'Connect OpenDesign',
+          titleError: 'Sign-in incomplete',
+          subtitle: 'Sign in to your OpenDesign account in the browser; the 5-hour and 7-day allowance will sync here automatically.',
+          login: 'Sign in with browser',
+          manual: 'Connect manually',
+          manualHint: 'Paste a control-plane key starting with vela_ctrl_. A model API key (sk-amr_…) cannot read quota.',
+          placeholder: 'vela_ctrl_…',
+          save: 'Save',
+          saving: 'Saving…',
+          tooShort: 'That value is too short to be a control-plane key.',
+          modelKey: 'That is a model API key; the control plane does not accept it. Use the browser sign-in above, or paste a vela_ctrl_… control-plane key.',
+          failed: 'Save failed',
+        },
+        pending: {
+          waiting: 'Waiting for browser approval',
+          expired: 'Approval expired',
+          remaining: 'remaining ',
+          expiredShort: 'expired',
+          code: 'Code',
+          link: 'Approval link',
+          blocked: 'The browser blocked the new tab: copy the approval link above and open it manually.',
+          hint: 'The allowance syncs automatically after approval; the browser tab closes itself.',
+          refresh: 'Refresh status',
+          retry: 'Start over',
+          open: 'Open approval page',
+        },
+        settings: {
+          openPage: 'Open quota page',
+          autoRefresh: 'Auto refresh',
+          autoRefreshHint: 'Reads once every 60 seconds',
+          enabled: 'Reading & header meter',
+          enabledHint: 'Turn off to stop polling and hide the header meter',
+          writeFailed: 'That write did not land (the config changed concurrently). Please try again.',
+        },
+        common: {
+          copy: 'Copy',
+          copied: 'Copied',
+        },
+        errors: {
+          credentialsNotReady: 'The credential service is not ready yet. Please try again in a moment.',
+          credentialsUnavailable: 'The credential service is not ready, so signing out is unavailable.',
+        },
+        window: {
+          days: (n) => n + '-day window',
+          hours: (n) => n + '-hour window',
+          minutes: (n) => n + '-minute window',
+        },
+        countdown: {
+          unknown: 'Reset time unknown',
+          soon: 'Resetting soon',
+          days: (d, h) => 'resets in ' + d + 'd ' + h + 'h',
+          hours: (h, m) => 'resets in ' + h + 'h ' + m + 'm',
+          minutes: (m) => 'resets in ' + m + 'm',
         },
       },
     }
 
-    const t = COPY.zh
+    /** Placeholder snapshot used before the locale service arrives. */
+    const EMPTY_LOCALE = { active: 'zh', locales: [], revision: 0 }
+
+    /** Locale face; resolved when the Client locale service is available. */
+    let localeFace
+
+    function subscribeLocale(listener) {
+      return localeFace === undefined ? () => {} : localeFace.subscribe(listener)
+    }
+
+    function readLocale() {
+      return localeFace === undefined ? EMPTY_LOCALE : localeFace.getSnapshot()
+    }
+
+    /** Copy for one locale id; language packs without a table fall back to English. */
+    function copyFor(active) {
+      return COPY[active] === undefined ? COPY.en : COPY[active]
+    }
+
+    /** Copy for the current locale, for non-component callers (slot labels). */
+    function copyNow() {
+      return copyFor(readLocale().active)
+    }
+
+    /** Current copy, re-rendering the component whenever the locale changes. */
+    function useCopy() {
+      const snapshot = React.useSyncExternalStore(subscribeLocale, readLocale, readLocale)
+      return copyFor(snapshot.active)
+    }
 
     // --- formatting ---------------------------------------------------------
 
@@ -171,12 +317,12 @@ window.__ModuleLoader__.load({
     }
 
     /** Human window label for the detail cards. */
-    function windowTitle(seconds) {
+    function windowTitle(seconds, copy) {
       const days = seconds / 86400
-      if (Number.isInteger(days) && days >= 1) return days + ' 天窗口'
+      if (Number.isInteger(days) && days >= 1) return copy.window.days(days)
       const hours = seconds / 3600
-      if (Number.isInteger(hours) && hours >= 1) return hours + ' 小时窗口'
-      return Math.round(seconds / 60) + ' 分钟窗口'
+      if (Number.isInteger(hours) && hours >= 1) return copy.window.hours(hours)
+      return copy.window.minutes(Math.round(seconds / 60))
     }
 
     /** Abbreviated label for the compact meter. */
@@ -189,18 +335,18 @@ window.__ModuleLoader__.load({
     }
 
     /** Coarse countdown to a reset instant. */
-    function countdown(resetsAt, now) {
+    function countdown(resetsAt, now, copy) {
       const target = Date.parse(resetsAt)
-      if (!Number.isFinite(target)) return '重置时间未知'
+      if (!Number.isFinite(target)) return copy.countdown.unknown
       const delta = target - (now === undefined ? Date.now() : now)
-      if (delta <= 0) return '即将重置'
+      if (delta <= 0) return copy.countdown.soon
       const minutes = Math.floor(delta / 60000)
       const days = Math.floor(minutes / 1440)
       const hours = Math.floor((minutes % 1440) / 60)
       const rest = minutes % 60
-      if (days > 0) return days + '天 ' + hours + '小时后重置'
-      if (hours > 0) return hours + '小时 ' + rest + '分后重置'
-      return rest + '分钟后重置'
+      if (days > 0) return copy.countdown.days(days, hours)
+      if (hours > 0) return copy.countdown.hours(hours, rest)
+      return copy.countdown.minutes(rest)
     }
 
     /** Compact mm:ss for an approval countdown. */
@@ -461,6 +607,7 @@ window.__ModuleLoader__.load({
      * the note is confirmed against the reading the page can actually see.
      */
     function useRefresh(form, send) {
+      const t = useCopy()
       const [busy, setBusy] = useState(false)
       const [note, setNote] = useState(undefined)
       const timer = useRef(undefined)
@@ -651,6 +798,7 @@ window.__ModuleLoader__.load({
     }
 
     function CopyButton(props) {
+      const t = useCopy()
       const [copied, setCopied] = useState(false)
       const timer = useRef(undefined)
       useEffect(() => () => {
@@ -704,6 +852,7 @@ window.__ModuleLoader__.load({
     /** @param props - injected `form` and `onOpen`. */
     function MeterBody(props) {
       const snapshot = useForm(props.form)
+      const t = useCopy()
       const [setRoot, available] = useHeaderFit()
       const value = snapshot.value instanceof Object ? snapshot.value : {}
       const enabled = value.enabled !== false
@@ -723,7 +872,9 @@ window.__ModuleLoader__.load({
       const tier = typeof quota.tier === 'string' ? cap(quota.tier) : ''
       const summary = summaryOf(windows)
       const at = clockOf(quota.asOf)
-      const title = t.meter.title(tier, summary, at, stale)
+      const age = Date.now() - Date.parse(quota.asOf)
+      const stalled = Number.isFinite(age) && age > 3 * 60_000
+      const title = t.meter.title(tier, summary, at, stale) + (stalled ? ' · ' + t.meter.hostStalled : '')
       const aria = t.meter.aria(summary, at, stale)
       const compact = level === 'compact'
       const mini = level === 'mini'
@@ -793,6 +944,7 @@ window.__ModuleLoader__.load({
     }
 
     function StatusLine(props) {
+      const t = useCopy()
       const quota = props.quota
       const parts = [
         typeof quota.email === 'string' && quota.email.length > 0 ? quota.email : undefined,
@@ -812,16 +964,17 @@ window.__ModuleLoader__.load({
     }
 
     function WindowCard(props) {
+      const t = useCopy()
       const window = props.window
       const pct = window.percentRemaining
       const width = pct === null || pct === undefined ? 0 : Math.max(0, Math.min(100, pct))
       const left = money(window.remainingCredits, props.rate)
       const limit = money(window.limitCredits, props.rate)
-      const reset = countdown(window.resetsAt, props.now)
+      const reset = countdown(window.resetsAt, props.now, t)
       const valueText = pctText(pct)
       return h('div', { className: 'odq-card odq-fade' },
         h('div', { className: 'odq-card-head' },
-          h('span', { className: 'odq-card-label' }, windowTitle(window.durationSeconds)),
+          h('span', { className: 'odq-card-label' }, windowTitle(window.durationSeconds, t)),
           h('span', { className: 'odq-card-meta' }, reset)),
         h('div', { className: 'odq-card-value', style: { color: meterColor(pct) } }, valueText),
         h('div', {
@@ -830,7 +983,7 @@ window.__ModuleLoader__.load({
           'aria-valuenow': width,
           'aria-valuemin': 0,
           'aria-valuemax': 100,
-          'aria-label': windowTitle(window.durationSeconds) + ' 剩余',
+          'aria-label': windowTitle(window.durationSeconds, t) + t.page.remaining,
           'aria-valuetext': valueText + '，' + reset,
         }, h('div', {
           className: 'odq-card-fill',
@@ -839,10 +992,11 @@ window.__ModuleLoader__.load({
         h('div', { className: 'odq-card-meta' },
           h('span', null, (left === undefined ? window.remainingCredits + ' credits' : left)
             + (limit === undefined ? '' : ' / ' + limit)),
-          h('span', null, props.fresh ? '' : '数据可能过期')))
+          h('span', null, props.fresh ? '' : t.page.staleHint)))
     }
 
     function WalletCard(props) {
+      const t = useCopy()
       const wallet = props.wallet
       const balance = money(wallet.balanceUsd, 1)
       return h('div', { className: 'odq-card odq-fade' },
@@ -886,6 +1040,7 @@ window.__ModuleLoader__.load({
      * manual key as a quieter section underneath the same border.
      */
     function SignInCard(props) {
+      const t = useCopy()
       const login = props.login
       const [draft, setDraft] = useState('')
       const [busy, setBusy] = useState(false)
@@ -952,6 +1107,7 @@ window.__ModuleLoader__.load({
 
     /** The approval sheet with its countdown, code, and link. */
     function PendingCard(props) {
+      const t = useCopy()
       const login = props.login
       const now = useNow(1000)
       const [blocked, setBlocked] = useState(false)
@@ -1030,6 +1186,7 @@ window.__ModuleLoader__.load({
     }
 
     function QuotaPage(props) {
+      const t = useCopy()
       if (props.form === undefined) {
         return h(PageShell, null,
           h('div', { className: 'odq-note' }, t.page.noForm))
@@ -1038,6 +1195,7 @@ window.__ModuleLoader__.load({
     }
 
     function QuotaPageBody(props) {
+      const t = useCopy()
       const form = props.form
       const snapshot = useForm(form)
       const now = useNow(30_000)
@@ -1051,6 +1209,12 @@ window.__ModuleLoader__.load({
       const fresh = hasNumbers && quota.status === 'ok'
       const scanning = quota === undefined && login === undefined
       const failure = quota === undefined ? undefined : quota.error
+      const age = quota === undefined ? Number.NaN : now - Date.parse(quota.asOf)
+      const hostStalled = enabled
+        && hasNumbers
+        && value.autoRefresh !== false
+        && Number.isFinite(age)
+        && age > 3 * 60_000
       const { busy, note, run } = useRefresh(form, props.onRefresh)
       const [reLoginBusy, setReLoginBusy] = useState(false)
       const [reLoginError, setReLoginError] = useState(undefined)
@@ -1107,7 +1271,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'odq-footer' },
             h('span', { style: { flex: 1, minWidth: 0 } },
               t.page.readAt + clockOf(quota.asOf)
-              + (quota.staleSince === undefined ? '' : t.page.lastSuccess + clockOf(quota.staleSince) + '）')
+              + (quota.staleSince === undefined ? '' : t.page.lastSuccess(clockOf(quota.staleSince)))
               + (failure === undefined ? '' : ' · ' + failure.message)),
             h(Badge, null)))
       }
@@ -1127,6 +1291,9 @@ window.__ModuleLoader__.load({
           : h('div', { className: 'odq-alert odq-alert-warn' },
             h('span', { style: { flex: 1 } }, t.page.disabled),
             h(Button, { onClick: () => void write('enabled', true) }, t.page.enable)),
+        hostStalled
+          ? h('div', { className: 'odq-alert odq-alert-warn' }, t.page.hostStalled(Math.floor(age / 60000)))
+          : null,
         content,
         note === undefined ? null : h('div', { className: 'odq-note' }, note),
         writeNote === undefined ? null : h('div', { className: 'odq-note' }, writeNote),
@@ -1138,6 +1305,7 @@ window.__ModuleLoader__.load({
     // --- settings section ---------------------------------------------------
 
     function SettingsSection(props) {
+      const t = useCopy()
       if (props.form === undefined) {
         return h('div', { style: { padding: 16, color: T.dim } }, t.page.noForm)
       }
@@ -1145,8 +1313,10 @@ window.__ModuleLoader__.load({
     }
 
     function SettingsBody(props) {
+      const t = useCopy()
       const form = props.form
       const snapshot = useForm(form)
+      const now = useNow(30_000)
       const value = snapshot.value instanceof Object ? snapshot.value : {}
       const quota = parseJson(value.quotaJson)
       const login = parseJson(value.loginJson)
@@ -1157,6 +1327,12 @@ window.__ModuleLoader__.load({
       const hasNumbers = windows.length > 0 && quota !== undefined && quota.status !== 'unconfigured'
       const fresh = hasNumbers && quota.status === 'ok'
       const failure = quota === undefined ? undefined : quota.error
+      const age = quota === undefined ? Number.NaN : now - Date.parse(quota.asOf)
+      const hostStalled = enabled
+        && hasNumbers
+        && autoRefresh
+        && Number.isFinite(age)
+        && age > 3 * 60_000
       const keyRef = typeof value.keyRef === 'string' && value.keyRef.length > 0 ? value.keyRef : DEFAULT_KEY_REF
       const { busy, note, run } = useRefresh(form, props.onRefresh)
       const [reLoginBusy, setReLoginBusy] = useState(false)
@@ -1196,6 +1372,9 @@ window.__ModuleLoader__.load({
           failure === undefined || fresh
             ? null
             : h('div', { className: 'odq-note' }, failure.message),
+          hostStalled
+            ? h('div', { className: 'odq-alert odq-alert-warn' }, t.page.hostStalled(Math.floor(age / 60000)))
+            : null,
           h('div', { className: 'odq-summary-actions' },
             h(Button, { onClick: () => void run(), disabled: busy }, busy ? t.page.refreshing : t.page.refresh),
             h(Button, {
@@ -1291,6 +1470,13 @@ window.__ModuleLoader__.load({
           layout = scoped.layout
         })
 
+        /** Locale preference; every surface re-renders when it changes. */
+        const localeNow = ctx.get('locale')
+        if (localeNow !== undefined) localeFace = localeNow
+        ctx.inject(['locale'], (scoped) => {
+          localeFace = scoped.locale
+        })
+
         const openPage = () => {
           try {
             if (layout !== undefined) layout.selectPanel(PANEL_ID)
@@ -1323,7 +1509,7 @@ window.__ModuleLoader__.load({
 
           /** Store the pasted control-plane key; the Host picks it up from there. */
           const saveKey = async (key, ref) => {
-            if (credentials === undefined) throw new Error('凭据服务尚未就绪，请稍后重试。')
+            if (credentials === undefined) throw new Error(copyNow().errors.credentialsNotReady)
             const result = await credentials.set(typeof ref === 'string' && ref.length > 0 ? ref : DEFAULT_KEY_REF, key)
             if (result !== undefined && result.ok === false) {
               throw new Error(messageOf(result.error))
@@ -1333,7 +1519,7 @@ window.__ModuleLoader__.load({
           /** Drop the stored key, which makes the Host offer a sign-in again. */
           const reLogin = async (ref) => {
             if (credentials === undefined) {
-              throw new Error('凭据服务尚未就绪，无法退出登录。')
+              throw new Error(copyNow().errors.credentialsUnavailable)
             }
             const target = typeof ref === 'string' && ref.length > 0 ? ref : DEFAULT_KEY_REF
             const result = await credentials.unset(target)
@@ -1361,7 +1547,7 @@ window.__ModuleLoader__.load({
             name: 'settings.section',
             id: ENTRY_ID,
             order: 60,
-            label: () => t.app.name,
+            label: () => copyNow().app.name,
             inject: injected,
           }, SettingsSection)))
 
@@ -1377,7 +1563,7 @@ window.__ModuleLoader__.load({
             name: 'sidebar.panellist',
             id: PANEL_ID,
             order: 50,
-            label: () => t.app.name,
+            label: () => copyNow().app.name,
           }, SidebarIcon)))
 
           // `order: -20` keeps the meter leftmost inside the right-anchored
@@ -1390,7 +1576,7 @@ window.__ModuleLoader__.load({
                 name: 'conversation.session.header.utilities',
                 id: ENTRY_ID + '-meter',
                 order: -20,
-                label: () => t.app.name,
+                label: () => copyNow().app.name,
                 inject: () => ({ form, onOpen: openPage }),
               }, Meter))
             } catch (error) {

@@ -57,7 +57,8 @@ dsh plugin --profile web add https://github.com/WuWei-Peng/dsh-od-quota/releases
 - **额度页**：整页滚动，内容居中 960px。两张大卡（5 小时 / 7 天）显示大号百分比、8px 进度条、剩余 / 上限金额与重置倒计时；钱包单独一张卡；页脚是读取时间与 `powered by dsh` 徽标。倒计时每 30 秒走动。
 - **设置摘要**：状态行 + 两条迷你额度条 + 刷新 / 打开额度页；下面两个开关映射已有配置项：`autoRefresh`（每 60 秒自动读）与 `enabled`（读取 + 顶栏显示）。
 - **顶栏额度条**：28px 高、无外边框、悬停背景，和头部图标按钮同一套尺寸与 token。宽度由宿主标题栏的实际剩余空间决定，四级降级：完整（套餐 + 两条 44px 条）→ 紧凑（无套餐 + 26px 条）→ 极简（状态点 + 最差百分比）→ 隐藏；点击整块打开额度页。
-- **配色与明暗**：只使用 `--dsw-alias-*` / `--dsw-radius-*` / `--dsw-focus-ring-*` 等宿主 token，深色 / 浅色自动跟随；文案集中在 `client.js` 的 `COPY` 表（当前中文）。
+- **配色与明暗**：只使用 `--dsw-alias-*` / `--dsw-radius-*` / `--dsw-focus-ring-*` 等宿主 token，深色 / 浅色自动跟随。
+- **中英双语**：界面文案跟随 DSH 的语言设置（设置 → 通用 → 语言）；文案集中在 `client.js` 的 `COPY` 表，其他语言回退到英文。
 
 ## 失败时的行为
 
@@ -67,6 +68,7 @@ dsh plugin --profile web add https://github.com/WuWei-Peng/dsh-od-quota/releases
 - **请求卡住（连接黑洞住，既不返回也不报错）**：每个请求除了 `AbortSignal` 还有一层外部截止时间，一次卡死最多拖住一轮；超过 2 个请求超时仍未返回的读数会被看门狗丢弃重开，后续刷新不会 join 到一个永不 resolve 的 promise。
 - **控制面 401**：自动发起一次重新登录，但每 5 分钟最多一次，避免把 60 秒轮询变成设备授权生成器。
 - **退出登录**：清掉凭据后 Host 立刻发布 `unconfigured`，页面回到登录态、顶栏额度条消失，不会继续展示已失效的旧数字。
+- **宿主不再更新读数**：超过 3 分钟没有新读数时，页面和设置摘要会提示「宿主可能没有在轮询」，顶栏 tooltip 也会注明。常见原因是运行中改动安装目录/配置让 Host 半被卸载；重启 `dsh web` 恢复。设置写入本身有 8 秒截止时间，一次卡住的写入不会再把轮询永久挂起。
 
 ## 结构
 
@@ -89,12 +91,17 @@ dsh plugin --profile web add https://github.com/WuWei-Peng/dsh-od-quota/releases
 | `refreshNonce` | `''` | 页面刷新按钮写入 |
 | `quotaJson` / `loginJson` | `''` | 插件写入的缓存，页面只读 |
 
+## 反馈
+
+- GitHub Issues：https://github.com/WuWei-Peng/dsh-od-quota/issues
+- 邮箱：18728030920@163.com
+
 ## 已知限制
 
 - 控制面接口是私有契约，字段变了只会在页面与日志里显示失败原因（日志只记字段名，不记数值），不会编造数字。
 - 顶栏额度条的宽度测量依赖宿主标题栏的布局容器（`container-type` + 标题区 / 工具区两个盒子）；宿主结构变化时会退回完整布局，不会崩溃，但可能不如预期紧凑。
 - 金额按 `creditsPerUsd` 折算；接口不给汇率时用 10,000 credits = $1；小于 1 美分显示 `< $0.01`。
-- 界面文案集中在 `client.js` 的 `COPY` 表，暂为中文；接入 Client locale 服务是后续项。
+- 界面文案集中在 `client.js` 的 `COPY` 表，中英双语跟随宿主语言；尚未注册到 Client locale 命名空间，第三方语言包不会提供额外翻译（回退英文）。
 - 只支持单账号；多账号需要把 `keyRef` 改成列表。
 - 设置页页脚内联了官方 `dsh-badge.png`（121×20，data URI），离线也能显示。
 
