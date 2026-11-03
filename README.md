@@ -1,5 +1,6 @@
 # dsh-od-quota
 
+[![npm](https://img.shields.io/npm/v/dsh-od-quota)](https://www.npmjs.com/package/dsh-od-quota)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/WuWei-Peng/dsh-od-quota)](https://github.com/WuWei-Peng/dsh-od-quota/releases)
 
@@ -21,10 +22,13 @@ OpenDesign 云有两个平面，额度只在控制面：
 ## 安装
 
 ```sh
-# 直接装仓库（无需发版）
+# npm（推荐，也是插件市场走的路径）
+dsh plugin --profile web add dsh-od-quota
+
+# 或直接装仓库
 dsh plugin --profile web add github:WuWei-Peng/dsh-od-quota
 
-# 或装 GitHub Release 上的预构建包（更快，不需要构建环境）
+# 或装 GitHub Release 上的预构建包（不经过 npm，适合内网/镜像受限）
 dsh plugin --profile web add https://github.com/WuWei-Peng/dsh-od-quota/releases/latest/download/dsh-od-quota.tgz
 ```
 
