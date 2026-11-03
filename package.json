@@ -1,7 +1,7 @@
 {
   "name": "dsh-od-quota",
-  "version": "0.1.4",
-  "description": "OpenDesign 订阅额度：侧栏额度页 + 设置摘要，会话标题栏常驻自适应额度条；中英双语界面",
+  "version": "0.1.5",
+  "description": "OpenDesign subscription quota for DeepSeek Harness: a sidebar quota page, a settings summary, and an adaptive session-header meter.",
   "type": "module",
   "license": "MIT",
   "author": "WuWei_Peng",
@@ -32,7 +32,8 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "README.zh.md"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0",

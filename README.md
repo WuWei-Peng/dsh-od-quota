@@ -1,109 +1,111 @@
+**English** | [中文](README.zh.md)
+
 # dsh-od-quota
 
 [![npm](https://img.shields.io/npm/v/dsh-od-quota)](https://www.npmjs.com/package/dsh-od-quota)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/WuWei-Peng/dsh-od-quota)](https://github.com/WuWei-Peng/dsh-od-quota/releases)
 
-> 非官方插件：与 Open Design / Powerformer 无隶属关系，仅按公开接口读取你自己账号的额度。
+> Unofficial plugin: not affiliated with Open Design / Powerformer. It only reads your own account's allowance through the public control-plane endpoints.
 
-在 DSH 里查看 **OpenDesign 订阅额度**。三个界面共读同一份读数：
+OpenDesign subscription quota inside DSH. Three surfaces read the same reading:
 
-| 界面 | 位置 | 作用 |
+| Surface | Where | What it does |
 | --- | --- | --- |
-| 额度页 | 左栏「OpenDesign 额度」图标 → 中央整页 | 5 小时 / 7 天窗口、钱包、登录与批准 |
-| 设置摘要 | 设置侧栏「OpenDesign 额度」 | 状态、两条迷你额度条、刷新 / 打开额度页、自动刷新与顶栏开关 |
-| 顶栏额度条 | 会话标题栏右侧（「打开应用」箭头左边） | 套餐 + 两条剩余额度条；宽度不够时自动降级；点击打开额度页 |
+| Quota page | Left sidebar "OpenDesign Quota" icon → full center page | 5-hour / 7-day windows, wallet, sign-in and approval |
+| Settings summary | Settings sidebar "OpenDesign Quota" | Status, two mini bars, refresh / open page, auto-refresh and header toggles |
+| Header meter | Session title bar, right of the title (left of the "Open in app" arrow) | Plan + two remaining bars; degrades when the row is tight; click to open the page |
 
-额度条按剩余百分比着色（绿 = 充足，黄 = 注意，红 = 快用完），数据过期时降透明度并在提示里说明。
+The bars are coloured by remaining percentage (green = plenty, amber = watch, red = nearly dry); stale data is dimmed and explained in the tooltip.
 
-## 它读什么
+## What it reads
 
-OpenDesign 云有两个平面，额度只在控制面：
+OpenDesign cloud has two planes; quota lives on the control plane:
 
-| 平面 | Host | Key | 用途 |
+| Plane | Host | Key | Use |
 | --- | --- | --- | --- |
-| 控制面 | `amr-api.open-design.ai` | `vela_ctrl_…` | 套餐、钱包、5h/7d 额度窗口、workspace |
-| 模型面 | `amr-link.open-design.ai/v1` | `sk-amr_…` | 推理 |
+| Control | `amr-api.open-design.ai` | `vela_ctrl_…` | plan, wallet, 5h/7d windows, workspace |
+| Model | `amr-link.open-design.ai/v1` | `sk-amr_…` | inference |
 
-`sk-amr_…` **读不到额度**（控制面不接受它），所以插件走控制面。`vela_ctrl_…` 不在任何网页上，由 CLI 设备授权（`vela login` 同一套流程）签发——插件就是替你跑这套流程的。
+`sk-amr_…` **cannot read quota** (the control plane refuses it), so the plugin uses the control plane. `vela_ctrl_…` is not printed on any page; it is issued by the CLI device-authorization flow (the same flow as `vela login`) — the plugin runs that flow for you.
 
-## 安装
+## Install
 
 ```sh
-# npm（推荐，也是插件市场走的路径）
+# npm (recommended; also the path the plugin market uses)
 dsh plugin --profile web add dsh-od-quota
 
-# 或直接装仓库
+# or straight from the repository
 dsh plugin --profile web add github:WuWei-Peng/dsh-od-quota
 
-# 或装 GitHub Release 上的预构建包（不经过 npm，适合内网/镜像受限）
+# or the prebuilt package from the GitHub Release (no npm; for restricted networks/mirrors)
 dsh plugin --profile web add https://github.com/WuWei-Peng/dsh-od-quota/releases/latest/download/dsh-od-quota.tgz
 ```
 
-装完重启一次 `dsh web`，左栏出现「OpenDesign 额度」图标，设置页同时提供一个摘要入口。
+Restart `dsh web` once after installing. The left sidebar then shows an "OpenDesign Quota" icon, and Settings gets a summary entry.
 
-## 工作方式
+## How it works
 
-1. 进入额度页或设置摘要时若没有 key，插件调用 `POST /api/v1/cli/device-authorizations` 生成批准链接与 6 位码；页面显示码、倒计时和可复制的链接。
-2. 你在浏览器登录 OpenDesign 并批准，插件轮询到 `controlKey`，写进 DSH 凭据服务（引用名默认 `OPENDESIGN_CONTROL_KEY`，可改 `keyRef`）。
-3. 之后每 60 秒读一次 `billing/preflight` + `billing/summary`，把结果写回本插件配置的 `quotaJson`；额度页、设置摘要和顶栏都只解析这一份文档。
-4. 手动刷新写 `refreshNonce`（时间戳 + 递增序号，连点两次也不会重样），宿主观测到变化立即重读；写入被拒绝时页面会明说并让你重试，而不是「点了没反应」。
-5. 一个 15 秒的看门狗按**墙钟**核对上次读取时间：漏掉的 tick、卡住不返回的请求、被设置编辑器拒绝的一次写入，都会在下次看门狗时补上。
+1. When the quota page or the settings summary opens without a key, the plugin calls `POST /api/v1/cli/device-authorizations` and gets an approval link plus a 6-character code; the page shows the code, a countdown, and a copyable link.
+2. You sign in to OpenDesign in the browser and approve; the plugin polls out the `controlKey` and stores it in the DSH credential service (reference name `OPENDESIGN_CONTROL_KEY` by default; change it with `keyRef`).
+3. After that it reads `billing/preflight` + `billing/summary` once every 60 seconds and writes the result into this plugin's `quotaJson`; the page, the settings summary and the header meter all parse only that document.
+4. A manual refresh writes `refreshNonce` (a timestamp plus a sequence number, so two clicks never collide); the Host notices the change and reads immediately. A refused write is reported with a retry hint instead of a button that appears to do nothing.
+5. A 15-second watchdog checks the last read against the **wall clock**: a missed tick, a request that never returns, or a write the settings editor refused is all repaired on the next pass.
 
-设备授权是主路径；也可以直接粘贴 `vela_ctrl_…`。粘贴 `sk-amr_…` 会被前端拒绝并说明原因。
+Device authorization is the primary path; pasting `vela_ctrl_…` directly also works. Pasting `sk-amr_…` is rejected by the UI with an explanation.
 
-## 界面细节
+## UI details
 
-- **额度页**：整页滚动，内容居中 960px。两张大卡（5 小时 / 7 天）显示大号百分比、8px 进度条、剩余 / 上限金额与重置倒计时；钱包单独一张卡；页脚是读取时间与 `powered by dsh` 徽标。倒计时每 30 秒走动。
-- **设置摘要**：状态行 + 两条迷你额度条 + 刷新 / 打开额度页；下面两个开关映射已有配置项：`autoRefresh`（每 60 秒自动读）与 `enabled`（读取 + 顶栏显示）。
-- **顶栏额度条**：28px 高、无外边框、悬停背景，和头部图标按钮同一套尺寸与 token。宽度由宿主标题栏的实际剩余空间决定，四级降级：完整（套餐 + 两条 44px 条）→ 紧凑（无套餐 + 26px 条）→ 极简（状态点 + 最差百分比）→ 隐藏；点击整块打开额度页。
-- **配色与明暗**：只使用 `--dsw-alias-*` / `--dsw-radius-*` / `--dsw-focus-ring-*` 等宿主 token，深色 / 浅色自动跟随。
-- **中英双语**：界面文案跟随 DSH 的语言设置（设置 → 通用 → 语言）；文案集中在 `client.js` 的 `COPY` 表，其他语言回退到英文。
+- **Quota page**: full-height scrolling page, content centred at 960px. Two large cards (5-hour / 7-day) show a big percentage, an 8px bar, remaining / limit money, and a reset countdown; the wallet gets its own card; the footer shows the read time and the `powered by dsh` badge. Countdowns tick every 30 seconds.
+- **Settings summary**: a status row, two mini bars, refresh / open page, and two switches for existing config fields: `autoRefresh` (read every 60 s) and `enabled` (reading + header meter).
+- **Header meter**: 28px tall, borderless, hover background — the same size and tokens as the header icon buttons. Its width is chosen from the space the host title row actually leaves: full (plan + two 44px bars) → compact (no plan + 26px bars) → mini (state dot + worst percentage) → hidden. Clicking it opens the quota page.
+- **Colour and theme**: only `--dsw-alias-*` / `--dsw-radius-*` / `--dsw-focus-ring-*` host tokens; light/dark follow automatically.
+- **Bilingual**: copy follows DSH's language setting (Settings → General → Language); strings live in the `COPY` table in `client.js`; other language packs fall back to English.
 
-## 失败时的行为
+## When things fail
 
-- **读失败但有过成功读数**：保留上一次数字，标记 `status: "stale"`，页面显示「数据已过期」+ 原因，额度条降低不透明度；不会把「网络抖了一下」显示成「你没登录」。
-- **从没有过读数**：显示未连接与具体失败原因，不显示 0%。
-- **`enabled: false`**：不轮询，顶栏额度条不渲染，额度页显示停用提示与「启用」按钮。
-- **请求卡住（连接黑洞住，既不返回也不报错）**：每个请求除了 `AbortSignal` 还有一层外部截止时间，一次卡死最多拖住一轮；超过 2 个请求超时仍未返回的读数会被看门狗丢弃重开，后续刷新不会 join 到一个永不 resolve 的 promise。
-- **控制面 401**：自动发起一次重新登录，但每 5 分钟最多一次，避免把 60 秒轮询变成设备授权生成器。
-- **退出登录**：清掉凭据后 Host 立刻发布 `unconfigured`，页面回到登录态、顶栏额度条消失，不会继续展示已失效的旧数字。
-- **宿主不再更新读数**：超过 3 分钟没有新读数时，页面和设置摘要会提示「宿主可能没有在轮询」，顶栏 tooltip 也会注明。常见原因是运行中改动安装目录/配置让 Host 半被卸载；重启 `dsh web` 恢复。设置写入本身有 8 秒截止时间，一次卡住的写入不会再把轮询永久挂起。
+- **A read fails but a previous reading exists**: the last numbers stay, marked `status: "stale"`; the page shows "Data is stale" plus the reason and the meter is dimmed. A network blip is never reported as "you are signed out".
+- **No reading has ever succeeded**: the page shows "not connected" and the concrete failure, not 0%.
+- **`enabled: false`**: no polling; the header meter does not render; the quota page shows a disabled notice and an Enable button.
+- **A request hangs (connection black hole, neither returns nor errors)**: every request has an outside deadline in addition to its `AbortSignal`, so one hang costs at most one round; a reading still pending after two timeouts is abandoned and restarted, and later refreshes never join a promise that will never resolve.
+- **Control plane 401**: one automatic re-sign-in, at most once per 5 minutes, so the 60-second poll does not become a device-authorization generator.
+- **Sign out**: the credential is removed, the Host publishes `unconfigured` at once, the page returns to the sign-in state, and the header meter disappears — no stale numbers are left behind.
+- **The Host stops refreshing**: after 3 minutes without a new reading, the page and settings summary say "the host may not be polling", and the header tooltip repeats it. The usual cause is an edit to the installed directory/config while the process was running, which unloads the Host half; restart `dsh web` to recover. Settings writes themselves have an 8-second deadline, so one wedged write can no longer freeze polling forever.
 
-## 结构
+## Layout
 
-| 文件 | 作用 |
+| File | Purpose |
 | --- | --- |
-| `index.js` | Host：设备授权、额度读取、轮询、写回配置 |
-| `client.js` | Client：额度页（`main`）、左栏图标（`sidebar.panellist`）、设置摘要（`settings.section`）、顶栏额度条（`conversation.session.header.utilities`） |
-| `cordis.patch.yml` | 插入 `od-quota` 行及其默认配置 |
-| `locale/*.json` | 插件管理页的标题与描述 |
-| `icon.svg` | 插件图标 |
+| `index.js` | Host: device authorization, quota reads, polling, writing back config |
+| `client.js` | Client: quota page (`main`), sidebar icon (`sidebar.panellist`), settings summary (`settings.section`), header meter (`conversation.session.header.utilities`) |
+| `cordis.patch.yml` | Inserts the `od-quota` row and its defaults |
+| `locale/*.json` | Plugin-manager title and description |
+| `icon.svg` | Plugin icon |
 
-## 配置
+## Configuration
 
-| 字段 | 默认 | 说明 |
+| Field | Default | Description |
 | --- | --- | --- |
-| `enabled` | `true` | 关闭后不轮询、额度条与页面不渲染 |
-| `keyRef` | `OPENDESIGN_CONTROL_KEY` | 控制面 key 的凭据引用名 |
-| `workspaceId` | `''` | 留空则用 `/workspaces/current` 自动解析 |
-| `autoRefresh` | `true` | 是否每 60 秒自动读 |
-| `refreshNonce` | `''` | 页面刷新按钮写入 |
-| `quotaJson` / `loginJson` | `''` | 插件写入的缓存，页面只读 |
+| `enabled` | `true` | When off: no polling, no meter, no page |
+| `keyRef` | `OPENDESIGN_CONTROL_KEY` | Credential reference holding the control-plane key |
+| `workspaceId` | `''` | Empty resolves via `/workspaces/current` |
+| `autoRefresh` | `true` | Read once every 60 seconds |
+| `refreshNonce` | `''` | Written by the page's refresh button |
+| `quotaJson` / `loginJson` | `''` | Plugin-written cache; the page only reads |
 
-## 反馈
+## Feedback
 
-- GitHub Issues：https://github.com/WuWei-Peng/dsh-od-quota/issues
-- 邮箱：18728030920@163.com
+- GitHub Issues: https://github.com/WuWei-Peng/dsh-od-quota/issues
+- Email: 18728030920@163.com
 
-## 已知限制
+## Known limitations
 
-- 控制面接口是私有契约，字段变了只会在页面与日志里显示失败原因（日志只记字段名，不记数值），不会编造数字。
-- 顶栏额度条的宽度测量依赖宿主标题栏的布局容器（`container-type` + 标题区 / 工具区两个盒子）；宿主结构变化时会退回完整布局，不会崩溃，但可能不如预期紧凑。
-- 金额按 `creditsPerUsd` 折算；接口不给汇率时用 10,000 credits = $1；小于 1 美分显示 `< $0.01`。
-- 界面文案集中在 `client.js` 的 `COPY` 表，中英双语跟随宿主语言；尚未注册到 Client locale 命名空间，第三方语言包不会提供额外翻译（回退英文）。
-- 只支持单账号；多账号需要把 `keyRef` 改成列表。
-- 设置页页脚内联了官方 `dsh-badge.png`（121×20，data URI），离线也能显示。
+- The control-plane API is a private contract. If its fields change, the page and logs show the failure (logs record field names, not values); the plugin never invents numbers.
+- The header meter's width measurement relies on the host title row's layout containers (`container-type` plus the title cluster / utilities boxes). If the host changes that structure, the meter falls back to the full layout — it will not crash, but it may be less compact than intended.
+- Money uses `creditsPerUsd`; when the API omits the rate, 10,000 credits = $1; amounts below one cent show `< $0.01`.
+- Copy lives in the `COPY` table in `client.js` and is bilingual following the host language; it is not registered in the Client locale namespace, so third-party language packs fall back to English.
+- Single account only; multiple accounts would need `keyRef` to become a list.
+- The settings footer inlines the official `dsh-badge.png` (121×20, data URI) so it renders offline.
 
 ---
 
