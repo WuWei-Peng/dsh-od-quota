@@ -6,7 +6,15 @@
 
 > 非官方插件：与 Open Design / Powerformer 无隶属关系，仅按公开接口读取你自己账号的额度。
 
-在 DSH 里查看 **OpenDesign 订阅额度**：设置页完成浏览器登录并展示 5 小时 / 7 天窗口与钱包，会话标题栏右侧（「打开应用」箭头左边）常驻套餐标识与两条剩余额度进度条（绿 = 充足，黄 = 注意，红 = 快用完）。
+在 DSH 里查看 **OpenDesign 订阅额度**。三个界面共读同一份读数：
+
+| 界面 | 位置 | 作用 |
+| --- | --- | --- |
+| 额度页 | 左栏「OpenDesign 额度」图标 → 中央整页 | 5 小时 / 7 天窗口、钱包、登录与批准 |
+| 设置摘要 | 设置侧栏「OpenDesign 额度」 | 状态、两条迷你额度条、刷新 / 打开额度页、自动刷新与顶栏开关 |
+| 顶栏额度条 | 会话标题栏右侧（「打开应用」箭头左边） | 套餐 + 两条剩余额度条；宽度不够时自动降级；点击打开额度页 |
+
+额度条按剩余百分比着色（绿 = 充足，黄 = 注意，红 = 快用完），数据过期时降透明度并在提示里说明。
 
 ## 它读什么
 
@@ -32,23 +40,30 @@ dsh plugin --profile web add github:WuWei-Peng/dsh-od-quota
 dsh plugin --profile web add https://github.com/WuWei-Peng/dsh-od-quota/releases/latest/download/dsh-od-quota.tgz
 ```
 
-装完重启一次 `dsh web`，设置侧栏出现「OpenDesign 额度」。
+装完重启一次 `dsh web`，左栏出现「OpenDesign 额度」图标，设置页同时提供一个摘要入口。
 
 ## 工作方式
 
-1. 进入设置页时若没有 key，插件调用 `POST /api/v1/cli/device-authorizations` 生成批准链接与 6 位码；页面显示码、倒计时和可复制的链接。
+1. 进入额度页或设置摘要时若没有 key，插件调用 `POST /api/v1/cli/device-authorizations` 生成批准链接与 6 位码；页面显示码、倒计时和可复制的链接。
 2. 你在浏览器登录 OpenDesign 并批准，插件轮询到 `controlKey`，写进 DSH 凭据服务（引用名默认 `OPENDESIGN_CONTROL_KEY`，可改 `keyRef`）。
-3. 之后每 60 秒读一次 `billing/preflight` + `billing/summary`，把结果写回本插件配置的 `quotaJson`；页面和标题栏都只解析这一份文档。
+3. 之后每 60 秒读一次 `billing/preflight` + `billing/summary`，把结果写回本插件配置的 `quotaJson`；额度页、设置摘要和顶栏都只解析这一份文档。
 4. 手动刷新写 `refreshNonce`（时间戳 + 递增序号，连点两次也不会重样），宿主观测到变化立即重读；写入被拒绝时页面会明说并让你重试，而不是「点了没反应」。
 5. 一个 15 秒的看门狗按**墙钟**核对上次读取时间：漏掉的 tick、卡住不返回的请求、被设置编辑器拒绝的一次写入，都会在下次看门狗时补上。
 
 设备授权是主路径；也可以直接粘贴 `vela_ctrl_…`。粘贴 `sk-amr_…` 会被前端拒绝并说明原因。
 
+## 界面细节
+
+- **额度页**：整页滚动，内容居中 960px。两张大卡（5 小时 / 7 天）显示大号百分比、8px 进度条、剩余 / 上限金额与重置倒计时；钱包单独一张卡；页脚是读取时间与 `powered by dsh` 徽标。倒计时每 30 秒走动。
+- **设置摘要**：状态行 + 两条迷你额度条 + 刷新 / 打开额度页；下面两个开关映射已有配置项：`autoRefresh`（每 60 秒自动读）与 `enabled`（读取 + 顶栏显示）。
+- **顶栏额度条**：28px 高、无外边框、悬停背景，和头部图标按钮同一套尺寸与 token。宽度由宿主标题栏的实际剩余空间决定，四级降级：完整（套餐 + 两条 44px 条）→ 紧凑（无套餐 + 26px 条）→ 极简（状态点 + 最差百分比）→ 隐藏；点击整块打开额度页。
+- **配色与明暗**：只使用 `--dsw-alias-*` / `--dsw-radius-*` / `--dsw-focus-ring-*` 等宿主 token，深色 / 浅色自动跟随；文案集中在 `client.js` 的 `COPY` 表（当前中文）。
+
 ## 失败时的行为
 
-- **读失败但有过成功读数**：保留上一次数字，标记 `status: "stale"`，页面显示「数据已过期」+ 原因，胶囊降低不透明度；不会把「网络抖了一下」显示成「你没登录」。
+- **读失败但有过成功读数**：保留上一次数字，标记 `status: "stale"`，页面显示「数据已过期」+ 原因，额度条降低不透明度；不会把「网络抖了一下」显示成「你没登录」。
 - **从没有过读数**：显示未连接与具体失败原因，不显示 0%。
-- **`enabled: false`**：不轮询，标题栏胶囊不渲染。
+- **`enabled: false`**：不轮询，顶栏额度条不渲染，额度页显示停用提示与「启用」按钮。
 - **请求卡住（连接黑洞住，既不返回也不报错）**：每个请求除了 `AbortSignal` 还有一层外部截止时间，一次卡死最多拖住一轮；超过 2 个请求超时仍未返回的读数会被看门狗丢弃重开，后续刷新不会 join 到一个永不 resolve 的 promise。
 - **控制面 401**：自动发起一次重新登录，但每 5 分钟最多一次，避免把 60 秒轮询变成设备授权生成器。
 - **退出登录**：清掉凭据后 Host 立刻发布 `unconfigured`，页面回到登录态、顶栏额度条消失，不会继续展示已失效的旧数字。
@@ -58,7 +73,7 @@ dsh plugin --profile web add https://github.com/WuWei-Peng/dsh-od-quota/releases
 | 文件 | 作用 |
 | --- | --- |
 | `index.js` | Host：设备授权、额度读取、轮询、写回配置 |
-| `client.js` | Client：设置页（`settings.section`）与标题栏胶囊（`conversation.session.header.utilities`） |
+| `client.js` | Client：额度页（`main`）、左栏图标（`sidebar.panellist`）、设置摘要（`settings.section`）、顶栏额度条（`conversation.session.header.utilities`） |
 | `cordis.patch.yml` | 插入 `od-quota` 行及其默认配置 |
 | `locale/*.json` | 插件管理页的标题与描述 |
 | `icon.svg` | 插件图标 |
@@ -67,7 +82,7 @@ dsh plugin --profile web add https://github.com/WuWei-Peng/dsh-od-quota/releases
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `enabled` | `true` | 关闭后不轮询、胶囊不渲染 |
+| `enabled` | `true` | 关闭后不轮询、额度条与页面不渲染 |
 | `keyRef` | `OPENDESIGN_CONTROL_KEY` | 控制面 key 的凭据引用名 |
 | `workspaceId` | `''` | 留空则用 `/workspaces/current` 自动解析 |
 | `autoRefresh` | `true` | 是否每 60 秒自动读 |
@@ -77,9 +92,9 @@ dsh plugin --profile web add https://github.com/WuWei-Peng/dsh-od-quota/releases
 ## 已知限制
 
 - 控制面接口是私有契约，字段变了只会在页面与日志里显示失败原因（日志只记字段名，不记数值），不会编造数字。
-- 顶栏显示套餐标识（`Go` / `Plus` / `Pro` / `Max`）+ 两条 96×6 进度条，按剩余百分比着色：>50% 绿、20–50% 黄、≤20% 红；数据过期整块降不透明度，退出登录后整块消失。
+- 顶栏额度条的宽度测量依赖宿主标题栏的布局容器（`container-type` + 标题区 / 工具区两个盒子）；宿主结构变化时会退回完整布局，不会崩溃，但可能不如预期紧凑。
 - 金额按 `creditsPerUsd` 折算；接口不给汇率时用 10,000 credits = $1；小于 1 美分显示 `< $0.01`。
-- 界面文案暂为中文硬编码（接入 client locale 服务是后续项）。
+- 界面文案集中在 `client.js` 的 `COPY` 表，暂为中文；接入 Client locale 服务是后续项。
 - 只支持单账号；多账号需要把 `keyRef` 改成列表。
 - 设置页页脚内联了官方 `dsh-badge.png`（121×20，data URI），离线也能显示。
 

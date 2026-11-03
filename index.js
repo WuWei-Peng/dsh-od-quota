@@ -23,6 +23,7 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import { readFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 
 /** Stable plugin module name; also the Loader id the page addresses. */
@@ -30,6 +31,20 @@ export const name = 'od-quota'
 
 /** Profile entry id; doubles as the settings namespace the page reads. */
 const ENTRY_ID = 'od-quota'
+
+/**
+ * Package version reported to the control plane when a device authorization
+ * starts. Read from the installed manifest rather than typed here: the literal
+ * used to live in this file and stayed at 0.1.0 across three releases.
+ */
+const PLUGIN_VERSION = (() => {
+  try {
+    const manifest = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+    return typeof manifest.version === 'string' && manifest.version.length > 0 ? manifest.version : '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+})()
 
 /** Control plane base. The model plane is a different host on purpose. */
 const CONSOLE_BASE = 'https://amr-api.open-design.ai/api/v1'
@@ -642,7 +657,7 @@ export function apply(ctx, raw) {
     try {
       const started = await requestJson(`${CONSOLE_BASE}/cli/device-authorizations`, {
         method: 'POST',
-        body: { cliVersion: 'od-quota/0.1.0', host: hostname() || 'dsh', profile: 'prod' },
+        body: { cliVersion: 'od-quota/' + PLUGIN_VERSION, host: hostname() || 'dsh', profile: 'prod' },
       })
       const deviceId = textOf(started.body?.deviceId)
       const deviceSecret = textOf(started.body?.deviceSecret)
