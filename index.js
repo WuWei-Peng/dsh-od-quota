@@ -135,6 +135,15 @@ export const Config = z.object({
   autoRefresh: z.boolean().default(true).volatile(),
   /** Bumped by the page's refresh button; a change forces one read. */
   refreshNonce: z.string().default('').volatile(),
+  /**
+   * Bumped by the page's "start over" control on the approval sheet.
+   *
+   * Without its own field the only way to restart a dead authorization is the
+   * refresh button, which is shared with the quota read: pressing it during a
+   * pending sign-in did nothing to the device code, so an expired or refused
+   * one stayed dead until the Host was restarted.
+   */
+  loginNonce: z.string().default('').volatile(),
   /** Serialized allowance reading; empty until the first successful read. */
   quotaJson: z.string().default('').volatile(),
   /** Serialized sign-in state; empty when no sign-in is in flight. */
@@ -161,6 +170,7 @@ function readConfig(raw) {
       workspaceId: typeof plain.workspaceId === 'string' ? plain.workspaceId : '',
       autoRefresh: plain.autoRefresh !== false,
       refreshNonce: typeof plain.refreshNonce === 'string' ? plain.refreshNonce : '',
+      loginNonce: typeof plain.loginNonce === 'string' ? plain.loginNonce : '',
     }
   }
   return {
@@ -169,11 +179,54 @@ function readConfig(raw) {
     workspaceId: raw.workspaceId.get() ?? '',
     autoRefresh: raw.autoRefresh.get() !== false,
     refreshNonce: raw.refreshNonce.get() ?? '',
+    loginNonce: raw.loginNonce.get() ?? '',
   }
 }
 
 /** Resolve after `ms`, never rejecting. @param ms - delay. @returns a promise. */
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Status codes worth sending again.
+ *
+ * The control plane answers `503 database_unavailable` in bursts. Measured on
+ * 2026-11-11 over four endpoints, 20 requests each: `billing/summary` 20/20,
+ * `billing/preflight` 18/20, `workspaces/current` 17/20, and the one-shot
+ * `POST /cli/device-authorizations` 15/20. The failures carry `cf-ray` and
+ * `server: cloudflare` headers, so they come from the origin through
+ * Cloudflare — not from this machine's proxy, which `curl` confirmed by
+ * failing on the same POST at the same rate.
+ *
+ * Retrying is therefore the correct answer to *this* failure, but only with a
+ * ceiling: `billing/summary` never failed, so an outage that outlasts every
+ * attempt is a real outage, and the page has to be allowed to say so.
+ *
+ * `520`–`524` are included, and were added only after a real run caught one:
+ * Cloudflare emits them when the origin returns an empty or malformed reply,
+ * which is the same transient origin failure as a 503 in every way that matters
+ * here. Sampling 40 sign-in starts returned 29 successes, 10 with the 503 body
+ * and 1 with a 520 Cloudflare error page — rare enough that a code list drawn
+ * from the visible sample alone would have missed it, and frequent enough to
+ * fail roughly one sign-in in forty.
+ */
+const TRANSIENT_STATUS = new Set([502, 503, 504, 520, 521, 522, 523, 524])
+
+/**
+ * How many times one request is attempted before its failure is believed.
+ *
+ * Sized from the measured streak length, not from taste: over a 60-request
+ * sample the 503s arrived in runs of up to five in a row, so six attempts are
+ * the smallest count that outlives one. The waits add up to ~7.5 s — absorbed
+ * by a 60-second poll, affordable once at sign-in.
+ */
+const TRANSIENT_ATTEMPTS = 6
+
+/**
+ * Base delay between transient retries, multiplied by the attempt number.
+ *
+ * 500/1000/1500/2000/2500 ms covers the ~5 s burst measured above.
+ */
+const TRANSIENT_RETRY_MS = 500
 
 /**
  * Race one promise against an outside deadline.
@@ -200,11 +253,38 @@ function withDeadline(promise, ms, label) {
  * signal already fired, and everything waiting on it waits forever. So the
  * deadline is also enforced from the outside: whichever settles first wins,
  * and the loser is abandoned.
+ *
+ * A 502/503/504 is retried inside the same call rather than returned: those are
+ * the control plane's own "try again" answers, and the device-authorization
+ * start has no second chance of its own — one believed 503 shows the user
+ * "sign-in failed" while the service is fine a second later.
+ *
+ * The retries are bounded twice over: by attempt count, and by wall clock.
+ * `REQUEST_TIMEOUT_MS` is a per-attempt deadline, so without the second bound
+ * six attempts of a blackholed connection would hold the caller for two
+ * minutes — longer than the poll interval that scheduled it, which is exactly
+ * how a "fix" turns into a frozen panel.
  * @param url - absolute URL.
  * @param options - method, headers, body.
  * @returns status and decoded body; a transport failure rejects.
  */
 async function requestJson(url, options = {}) {
+  const giveUpAt = Date.now() + REQUEST_TIMEOUT_MS * 2
+  for (let attempt = 0; ; attempt += 1) {
+    const answer = await requestOnce(url, options)
+    if (!TRANSIENT_STATUS.has(answer.status) || attempt + 1 >= TRANSIENT_ATTEMPTS) return answer
+    if (Date.now() + TRANSIENT_RETRY_MS * (attempt + 1) >= giveUpAt) return answer
+    await sleep(TRANSIENT_RETRY_MS * (attempt + 1))
+  }
+}
+
+/**
+ * One attempt of {@link requestJson}: no retry, one deadline.
+ * @param url - absolute URL.
+ * @param options - method, headers, body.
+ * @returns status and decoded body.
+ */
+async function requestOnce(url, options) {
   const controller = typeof AbortController === 'function' ? new AbortController() : undefined
   let timer
   const deadline = new Promise((_resolve, reject) => {
@@ -281,6 +361,9 @@ function httpFailure(status, body) {
   if (status === 403) return failureOf('forbidden', '该账号没有查看额度的权限。')
   if (status === 404) return failureOf('not-found', 'workspace 不存在（或 key 属于另一个工作空间）。')
   if (status === 429) return failureOf('rate-limited', '请求过于频繁，稍后会重试。')
+  // The retry has already run out by the time this surfaces, so the copy must
+  // promise the *next* poll, not an in-flight retry that no longer exists.
+  if (status === 503) return failureOf('unavailable', 'OpenDesign 服务暂时不可用，稍后会自动重试。')
   return failureOf('http', said ?? `控制面返回 HTTP ${status}。`)
 }
 
@@ -485,8 +568,27 @@ export function apply(ctx, raw) {
   let lastReadStartedAt = 0
   /** A snapshot whose write was refused, kept so the watchdog can retry it. */
   let unpublished
+  /**
+   * How many watchdog passes in a row have tried to flush `unpublished`.
+   *
+   * The retry path used to `return` after every attempt, so a write that stayed
+   * refused starved the read that would have replaced the stale snapshot — the
+   * panel froze with old numbers while the network was perfectly fine, which is
+   * the opposite of what the retry was for. After a few passes the flush yields
+   * to the read instead of blocking it forever.
+   */
+  let unpublishedTries = 0
   let inflight
   let device
+  /**
+   * Ticket that identifies the current sign-in attempt.
+   *
+   * Every start bumps it. A superseded attempt compares its own ticket against
+   * this counter and stops before writing: without it, a restart (the page's
+   * "Start over") left the previous loop polling and publishing alongside the
+   * new one, so the sheet could show a code the Host had already abandoned.
+   */
+  let loginGeneration = 0
   let disposed = false
   /** Email the last successful sign-in reported. */
   let signedInEmail
@@ -528,6 +630,7 @@ export function apply(ctx, raw) {
     const factsJson = JSON.stringify(facts)
     if (factsJson === lastPublished && Date.now() - lastPublishedAt < PUBLISH_DEDUPE_MS) {
       unpublished = undefined
+      unpublishedTries = 0
       return
     }
     const accepted = await publish('quotaJson', JSON.stringify(snapshot))
@@ -538,6 +641,7 @@ export function apply(ctx, raw) {
       return
     }
     unpublished = undefined
+    unpublishedTries = 0
     lastPublished = factsJson
     lastPublishedAt = Date.now()
   }
@@ -626,14 +730,21 @@ export function apply(ctx, raw) {
 
   /**
    * Wait for the browser approval and exchange it for the account's keys.
+   *
+   * `generation` is the caller's ticket: a newer sign-in attempt bumps the
+   * shared counter, and this loop then stops without publishing anything. Two
+   * concurrent loops are not a cosmetic problem — each one polls a different
+   * device code and the loser's `publishLogin` would overwrite the winner's
+   * code on screen, leaving the user approving a code the Host already dropped.
    * @param authorization - the started device authorization.
+   * @param generation - the sign-in attempt this loop belongs to.
    */
-  const awaitApproval = async (authorization) => {
+  const awaitApproval = async (authorization, generation) => {
     const config = current()
     while (!disposed && Date.now() < authorization.until) {
       await sleep(authorization.interval)
       if (disposed) return
-      if (authorization.cancelled === true) return
+      if (generation !== loginGeneration) return
       let answer
       try {
         answer = await requestJson(
@@ -643,6 +754,9 @@ export function apply(ctx, raw) {
       } catch {
         continue
       }
+      // The wait outlived the version check at the top of the loop while the
+      // request was in flight, so a superseded attempt must not write.
+      if (generation !== loginGeneration) return
       const controlKey = textOf(answer.body?.controlKey)
       if (controlKey !== undefined) {
         const credentials = credentialsOf()
@@ -660,14 +774,20 @@ export function apply(ctx, raw) {
         return
       }
       const status = String(answer.body?.status ?? '').toLowerCase()
-      if (answer.status === 401 || answer.status === 404
+      if (answer.status === 401 || answer.status === 404 || answer.status === 410
         || ['expired', 'canceled', 'cancelled', 'denied', 'rejected'].includes(status)) {
         await publishLogin({ status: 'error', message: '批准已过期或被拒绝，请重新登录。' })
         return
       }
-      // pending, or an answer this build does not know: keep polling.
+      // Everything else — pending, a 5xx, or an answer this build does not
+      // recognise — keeps polling until the authorization's own deadline. A 5xx
+      // in particular must not be reported as a failed approval: the user may
+      // have approved already and the token endpoint is the only place that
+      // fact surfaces, so ending the wait here would throw away a valid grant.
     }
-    if (!disposed) await publishLogin({ status: 'error', message: '等待批准超时，请重新登录。' })
+    if (!disposed && generation === loginGeneration) {
+      await publishLogin({ status: 'error', message: '等待批准超时，请重新登录。' })
+    }
   }
 
   /**
@@ -690,15 +810,32 @@ export function apply(ctx, raw) {
       if (Date.now() - device.startedAt < 30_000) return
     }
     device = { startedAt: Date.now() }
+    // Claim a generation before the request, not after: the ticket has to be
+    // valid across the await that actually creates the authorization, or a
+    // restart issued in that window would race two starting requests.
+    loginGeneration += 1
+    const generation = loginGeneration
     try {
       const started = await requestJson(`${CONSOLE_BASE}/cli/device-authorizations`, {
         method: 'POST',
         body: { cliVersion: 'od-quota/' + PLUGIN_VERSION, host: hostname() || 'dsh', profile: 'prod' },
       })
+      // A superseded attempt stops here, before it can publish a code that is
+      // already stale on screen.
+      if (generation !== loginGeneration) return
       const deviceId = textOf(started.body?.deviceId)
       const deviceSecret = textOf(started.body?.deviceSecret)
       if (!started.ok || deviceId === undefined || deviceSecret === undefined) {
-        await publishLogin({ status: 'error', message: `发起登录失败（HTTP ${started.status}）。` })
+        // Retries already happened inside `requestJson`, so this status is the
+        // service's settled answer. Say which one: a 503 means "still starting
+        // up, press again", a 4xx means the request itself was refused, and
+        // those two lead the user to opposite actions.
+        await publishLogin({
+          status: 'error',
+          message: started.status === 503
+            ? 'OpenDesign 服务暂时不可用，请稍后重试登录。'
+            : `发起登录失败（HTTP ${started.status}）。`,
+        })
         return
       }
       const intervalSeconds = Number(started.body?.pollIntervalSeconds)
@@ -723,14 +860,19 @@ export function apply(ctx, raw) {
       }
       device = authorization
       await publishLogin(authorization.payload)
-      await awaitApproval(authorization)
+      await awaitApproval(authorization, generation)
     } catch (error) {
+      if (generation !== loginGeneration) return
       await publishLogin({
         status: 'error',
         message: `无法连接 OpenDesign：${error instanceof Error ? error.message : String(error)}`,
       })
     } finally {
-      device = undefined
+      // Only clear the slot this attempt owns. A superseded attempt reaching
+      // its own `finally` used to blank the *newer* attempt's state, after which
+      // a third press saw "no sign-in in flight" and started a fourth — the
+      // approval page multiplied while the screen showed one code.
+      if (generation === loginGeneration) device = undefined
     }
   }
 
@@ -738,6 +880,7 @@ export function apply(ctx, raw) {
   // One poll loop, one config watcher. Both belong to this entry's effect, so a
   // disable or an unload stops them without leaving a timer behind.
   let lastNonce = current().refreshNonce
+  let lastLoginNonce = current().loginNonce
   let lastKeyRef = current().keyRef
   let lastWorkspace = current().workspaceId
   let lastEnabled = current().enabled
@@ -750,9 +893,11 @@ export function apply(ctx, raw) {
     const watch = setInterval(() => {
       const config = current()
       const forced = config.refreshNonce !== lastNonce
+      const restarted = config.loginNonce !== lastLoginNonce
       const retargeted = config.keyRef !== lastKeyRef || config.workspaceId !== lastWorkspace
       const reenabled = config.enabled && !lastEnabled
       lastNonce = config.refreshNonce
+      lastLoginNonce = config.loginNonce
       lastKeyRef = config.keyRef
       lastWorkspace = config.workspaceId
       lastEnabled = config.enabled
@@ -761,6 +906,16 @@ export function apply(ctx, raw) {
         // refresh of the same account keeps the last reading so a transient
         // failure can still be shown as stale numbers instead of an empty page.
         lastGood = undefined
+      }
+      if (restarted) {
+        // The page asked for a new device code. Clearing `device` here is what
+        // lets the call through: the 30-second guard reads it, and an expired
+        // code has usually outlived that window anyway. The generation bump
+        // inside `ensureLogin` is what actually retires the old loop.
+        device = undefined
+        lastPublished = ''
+        void ensureLogin({ force: true })
+        return
       }
       if (forced || retargeted || reenabled) {
         lastPublished = ''
@@ -784,8 +939,16 @@ export function apply(ctx, raw) {
         inflight = undefined
       }
       if (unpublished !== undefined && inflight === undefined) {
-        void publishReading(unpublished)
-        return
+        if (unpublishedTries < 3) {
+          unpublishedTries += 1
+          void publishReading(unpublished)
+          return
+        }
+        // Three passes without the write landing means the profile is refusing
+        // writes, not that one write was unlucky. Fall through to the read so
+        // the numbers stay fresh; the snapshot is still kept for one more try.
+        unpublishedTries = 0
+        log('unpublished reading still refused; reading again instead of retrying forever')
       }
       if (!config.autoRefresh || inflight !== undefined) return
       const overdue = Date.now() - lastReadStartedAt

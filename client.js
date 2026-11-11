@@ -46,6 +46,21 @@ window.__ModuleLoader__.load({
       return `${Date.now()}-${refreshSequence}`
     }
 
+    /**
+     * Nonce for "start a new device code".
+     *
+     * Separate from the refresh nonce because the two ask the Host for
+     * different things: a refresh re-reads the quota and leaves a live
+     * authorization alone, while this discards it. Sharing one field meant the
+     * retry button on an expired approval sheet only refreshed the quota and
+     * left the dead code on screen.
+     */
+    let loginSequence = 0
+    const nextLoginNonce = () => {
+      loginSequence += 1
+      return `${Date.now()}-${loginSequence}`
+    }
+
     /** Remaining-percentage thresholds: green plenty, amber watch, red dry. */
     const GREEN_AT = 50
     const AMBER_AT = 20
@@ -1156,7 +1171,12 @@ window.__ModuleLoader__.load({
         h('div', { className: 'odq-note', style: { textAlign: 'right' } },
           blocked ? t.pending.blocked : t.pending.hint),
         h('div', { className: 'odq-actions' },
-          h(Button, { onClick: props.onRefresh }, expired ? t.pending.retry : t.pending.refresh),
+          h(Button, {
+            // An expired code cannot be refreshed back to life: the button has
+            // to ask for a new one, or the sheet keeps showing a dead code and
+            // a link the vendor will refuse.
+            onClick: expired ? props.onRestartLogin : props.onRefresh,
+          }, expired ? t.pending.retry : t.pending.refresh),
           h(Button, {
             variant: 'primary',
             disabled: url === undefined,
@@ -1246,7 +1266,11 @@ window.__ModuleLoader__.load({
       if (!enabled) {
         content = null
       } else if (pending) {
-        content = h(PendingCard, { login, onRefresh: () => void run() })
+        content = h(PendingCard, {
+          login,
+          onRefresh: () => void run(),
+          onRestartLogin: props.onRestartLogin,
+        })
       } else if (scanning) {
         content = h(SkeletonCards, null)
       } else if (!hasNumbers) {
@@ -1394,7 +1418,11 @@ window.__ModuleLoader__.load({
         h(StyleTag, { key: 'sheet' }),
         enabled ? null : h('div', { className: 'odq-alert odq-alert-warn' }, t.page.disabledShort),
         pending
-          ? h(PendingCard, { login, onRefresh: () => void run() })
+          ? h(PendingCard, {
+            login,
+            onRefresh: () => void run(),
+            onRestartLogin: props.onRestartLogin,
+          })
           : hasNumbers
             ? summary
             : enabled
@@ -1535,10 +1563,17 @@ window.__ModuleLoader__.load({
            */
           const refresh = () => form.set('refreshNonce', nextRefreshNonce())
 
+          /**
+           * Ask the Host for a brand-new device code.
+           * @returns whether the write was accepted.
+           */
+          const restartLogin = () => form.set('loginNonce', nextLoginNonce())
+
           const injected = () => ({
             form,
             saveKey,
             onRefresh: refresh,
+            onRestartLogin: restartLogin,
             onReLogin: async () => { await reLogin(form.getSnapshot().value?.keyRef) },
             onOpen: openPage,
           })
