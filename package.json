@@ -1,6 +1,6 @@
 {
   "name": "dsh-od-quota",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "OpenDesign subscription quota for DeepSeek Harness: a sidebar quota page, a settings summary, and an adaptive session-header meter.",
   "type": "module",
   "license": "MIT",
